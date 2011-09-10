@@ -24,40 +24,41 @@ import net.osmand.osm.MapUtils;
 import org.apache.commons.logging.Log;
 
 public class BinaryRoutePlanner {
-	
+
 	private final static boolean PRINT_TO_CONSOLE_ROUTE_INFORMATION_TO_TEST = true;
 	private final int REVERSE_WAY_RESTRICTION_ONLY = 1024;
 	private final BinaryMapIndexReader[] map;
-	
-	
-	
+
 	private static final Log log = LogUtil.getLog(BinaryRoutePlanner.class);
-	
+
 	public BinaryRoutePlanner(BinaryMapIndexReader... map){
 		this.map = map;
 	}
-	
-	
+
 	private static double squareRootDist(int x1, int y1, int x2, int y2) {
 		// translate into meters 
 		double dy = convert31YToMeters(y1, y2);
 		double dx = convert31XToMeters(x1, x2);
 		return Math.sqrt(dx * dx + dy * dy);
 	}
-	
+
+	private static double squareDist(int x1, int y1, int x2, int y2) {
+		// translate into meters 
+		double dy = convert31YToMeters(y1, y2);
+		double dx = convert31XToMeters(x1, x2);
+		return dx * dx + dy * dy;
+	}
+
 	private static double convert31YToMeters(int y1, int y2) {
 		// translate into meters 
 		return (y1 - y2) * 0.01863d;
 	}
-	
+
 	private static double convert31XToMeters(int x1, int x2) {
 		// translate into meters 
 		return (x1 - x2) * 0.011d;
 	}
-	
-	
 
-   
 	public void loadRoutes(final RoutingContext ctx, int tileX, int tileY) throws IOException {
 		int tileC = (tileX << ctx.getZoomToLoadTileWithRoads()) + tileY;
 		if(ctx.loadedTiles.contains(tileC)){
@@ -116,52 +117,58 @@ public class BinaryRoutePlanner {
 		}
 	}
 	
-	// calculate distance from C to AB (distnace doesn't calculate 
-    private static double calculateDistance(int xA, int yA, int xB, int yB, int xC, int yC, double distAB){
+	// calculate distance from C to AB (distance doesn't calculate 
+	private static double calculateDistance(int xA, int yA, int xB, int yB, int xC, int yC, double distAB) {
     	// Scalar multiplication between (AB', AC)
-    	double multiple = (-convert31YToMeters(yB, yA)) * convert31XToMeters(xC,xA) + convert31XToMeters(xB,xA) * convert31YToMeters(yC, yA);
-    	return multiple / distAB;
-    }
-    
-	private static double calculateProjection(int xA, int yA, int xB, int yB, int xC, int yC, double distAB) {
-		// Scalar multiplication between (AB, AC)
-		double multiple = convert31XToMeters(xB, xA) * convert31XToMeters(xC, xA) + convert31XToMeters(yB, yA) * convert31YToMeters(yC, yA);
+		double multiple = (-convert31YToMeters(yB, yA)) * convert31XToMeters(xC,xA) + convert31XToMeters(xB,xA) * convert31YToMeters(yC, yA);
 		return multiple / distAB;
 	}
-	
-	
+
+	// calculate square distance from C to AB (distance doesn't calculate 
+	private static double calculatesquareDistance(int xA, int yA, int xB, int yB, int xC, int yC, double distAB) {
+    	// Scalar multiplication between (AB', AC)
+		double multiple = (-convert31YToMeters(yB, yA)) * convert31XToMeters(xC,xA) + convert31XToMeters(xB,xA) * convert31YToMeters(yC, yA);
+		return (multiple * multiple) / (distAB * distAB);
+	}
+
+	private static double calculateProjection(int xA, int yA, int xB, int yB, int xC, int yC, double distAB) {
+		// Scalar multiplication between (AB, AC)
+		double multiple = convert31XToMeters(xB, xA) * convert31XToMeters(xC, xA) + convert31YToMeters(yB, yA) * convert31YToMeters(yC, yA);
+		return multiple / distAB;
+	}
+
 	public RouteSegment findRouteSegment(double lat, double lon, RoutingContext ctx) throws IOException {
 		double tileX = MapUtils.getTileNumberX(ctx.getZoomToLoadTileWithRoads(), lon);
 		double tileY = MapUtils.getTileNumberY(ctx.getZoomToLoadTileWithRoads(), lat);
 		loadRoutes(ctx, (int) tileX , (int) tileY);
 		
 		RouteSegment road = null;
-		double dist = 0; 
+		double sdist = 0; 
 		int px = MapUtils.get31TileNumberX(lon);
 		int py = MapUtils.get31TileNumberY(lat);
 		for(BinaryMapDataObject r : ctx.values()){
 			if(r.getPointsLength() > 1){
 				double priority = ctx.getRouter().getRoadPriorityToCalculateRoute(r);
 				for (int j = 1; j < r.getPointsLength(); j++) {
-					double mDist = squareRootDist(r.getPoint31XTile(j), r.getPoint31YTile(j), r.getPoint31XTile(j - 1), r.getPoint31YTile(j - 1));
+					double mDist = squareDist(r.getPoint31XTile(j), r.getPoint31YTile(j), r.getPoint31XTile(j - 1), r.getPoint31YTile(j - 1));
 					double projection = calculateProjection(r.getPoint31XTile(j - 1), r.getPoint31YTile(j - 1), r.getPoint31XTile(j), r.getPoint31YTile(j),
 							px, py, mDist);
-					double currentDist;
-					if(projection < 0){
-						currentDist = squareRootDist(r.getPoint31XTile(j - 1), r.getPoint31YTile(j - 1), px, py) / priority;
+					double currentsDist;
+					if(projection < 0){//TODO: first 2 and last 2 points of a route should be only near and not based on road priority (I.E. a motorway road node unreachable near my house)
+						currentsDist = squareDist(r.getPoint31XTile(j - 1), r.getPoint31YTile(j - 1), px, py) / (priority * priority);
 					} else if(projection > mDist){
-						currentDist = squareRootDist(r.getPoint31XTile(j), r.getPoint31YTile(j), px, py) / priority;
+						currentsDist = squareDist(r.getPoint31XTile(j), r.getPoint31YTile(j), px, py) / (priority * priority);
 					} else {
-						currentDist = Math.abs(calculateDistance(r.getPoint31XTile(j - 1), r.getPoint31YTile(j - 1), r.getPoint31XTile(j), r.getPoint31YTile(j),
-								px, py, mDist)) / priority;
+						currentsDist = calculatesquareDistance(r.getPoint31XTile(j - 1), r.getPoint31YTile(j - 1), r.getPoint31XTile(j), r.getPoint31YTile(j),
+								px, py, mDist) / (priority * priority);
 					}
 					
-					if (road == null || currentDist < dist) {
+					if (road == null || currentsDist < sdist) {
 						road = new RouteSegment();
 						road.road = r;
-						road.segmentStart = j - 1;
+						road.segmentStart = j - 1;//TODO: first 2 and last 2 segments should be based on projection. my start/finish point S/F, fake point P between j-1 & j -> SP, PJ; should end at finish point: JP,PF
 						road.segmentEnd = j;
-						dist = currentDist;
+						sdist = currentsDist;
 					}
 				}
 			}
@@ -342,11 +349,7 @@ public class BinaryRoutePlanner {
 			} else if (!plusAllowed && d < 0) {
 				d--;
 			} else {
-				if (d <= 0) {
-					d = -d + 1;
-				} else {
-					d = -d;
-				}
+				d = d <= 0 ? -d + 1 : -d;
 			}
 			if (segmentEnd < 0) {
 				minusAllowed = false;
